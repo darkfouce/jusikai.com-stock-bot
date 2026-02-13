@@ -1,40 +1,61 @@
-import telegram
-import asyncio
-import os
 import sys
+import os
+import traceback
 
-# 환경변수 가져오기
+print("🚀 [시작] 프로그램이 실행되었습니다.")
+
+# 1. 라이브러리 테스트
+try:
+    import telegram
+    import asyncio
+    import requests
+    from bs4 import BeautifulSoup
+    print("✅ [성공] 라이브러리(도구)가 정상적으로 설치되었습니다.")
+except ImportError as e:
+    print(f"❌ [에러] 라이브러리 설치 실패! requirements.txt를 확인하세요.\n에러내용: {e}")
+    sys.exit(1)
+
+# 2. 비밀번호(Secrets) 테스트
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 
-async def force_send():
-    print("🚀 [테스트] 텔레그램 강제 발송 시작")
-    
-    # 1. 토큰/ID 확인
-    if not TOKEN:
-        print("❌ [실패] TELEGRAM_TOKEN이 설정되지 않았습니다.")
-        sys.exit(1)
-    if not CHAT_ID:
-        print("❌ [실패] CHAT_ID가 설정되지 않았습니다.")
-        sys.exit(1)
-        
-    print(f"ℹ️ 설정된 CHAT_ID: {CHAT_ID} (맞는지 확인하세요)")
+if not TOKEN:
+    print("❌ [에러] TELEGRAM_TOKEN이 없습니다! Settings -> Secrets 설정을 확인하세요.")
+    sys.exit(1)
+if not CHAT_ID:
+    print("❌ [에러] CHAT_ID가 없습니다! Settings -> Secrets 설정을 확인하세요.")
+    sys.exit(1)
 
-    # 2. 메시지 전송 시도
+print(f"✅ [성공] 비밀번호를 가져왔습니다. (ID 길이: {len(str(CHAT_ID))})")
+
+# 3. 텔레그램 발송 테스트
+async def send_debug_msg():
+    print("📨 [연결] 텔레그램 발송 시도 중...")
     bot = telegram.Bot(token=TOKEN)
     
     try:
+        # 가장 기본 메시지 보내기
         await bot.send_message(chat_id=CHAT_ID, text="🔔 [테스트] 이 메시지가 보이면 성공입니다!")
-        print("✅ [성공] 텔레그램 메시지를 보냈습니다! 핸드폰을 확인하세요.")
-    except telegram.error.Unauthorized:
-        print("❌ [실패] 봇이 차단되었습니다. 텔레그램 앱에서 봇에게 '/start'를 입력했는지 확인하세요.")
-        sys.exit(1)
-    except telegram.error.BadRequest:
-        print("❌ [실패] CHAT_ID가 틀렸습니다. 내 ID가 맞는지 다시 확인하세요.")
-        sys.exit(1)
+        print("🎉 [완료] 텔레그램 메시지 전송 성공! 핸드폰을 확인하세요.")
     except Exception as e:
-        print(f"❌ [에러] 알 수 없는 오류: {e}")
+        print("❌ [치명적 에러] 텔레그램 전송 실패!")
+        print(f"에러 상세 내용: {e}")
+        print("-" * 30)
+        print("💡 [해결 힌트]")
+        if "Unauthorized" in str(e):
+            print("-> 토큰(TOKEN)이 틀렸습니다. 봇파더에게 다시 받으세요.")
+        elif "Chat not found" in str(e) or "BadRequest" in str(e):
+            print("-> CHAT_ID가 틀렸거나, 봇에게 먼저 말을 걸지 않았습니다.")
+            print("-> 텔레그램 앱에서 봇에게 '/start'라고 말을 거세요.")
+        else:
+            print("-> 알 수 없는 오류입니다. 에러 내용을 복사해서 질문하세요.")
+        print("-" * 30)
         sys.exit(1)
 
 if __name__ == "__main__":
-    asyncio.run(force_send())
+    try:
+        asyncio.run(send_debug_msg())
+    except Exception as total_error:
+        print("☠️ [시스템 다운] 알 수 없는 이유로 프로그램이 꺼졌습니다.")
+        traceback.print_exc()
+        sys.exit(1)
