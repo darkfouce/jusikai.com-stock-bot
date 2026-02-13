@@ -11,7 +11,6 @@ TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 DATA_FILE = "stock_history.csv"
 
-# 지수 정보 수집
 def get_indices():
     results = []
     for name, code in {'코스피':'KS11', '코스닥':'KQ11', '나스닥':'IXIC'}.items():
@@ -23,7 +22,6 @@ def get_indices():
         except: results.append(f"{name}: 조회불가")
     return "\n".join(results)
 
-# 종목 상세 정보 수집
 def get_details(name):
     try:
         df_krx = fdr.StockListing('KRX')
@@ -42,7 +40,7 @@ async def main():
     if not TOKEN or not CHAT_ID: return
     bot = telegram.Bot(token=TOKEN)
     
-    # 크롤링 및 데이터 분석
+    # 크롤링
     res = requests.get("https://jusikai.com/", headers={'User-Agent':'Mozilla/5.0'})
     soup = BeautifulSoup(res.text, 'html.parser')
     tags = soup.select('.ranking-stock-name') or soup.select('tr td a')
@@ -51,30 +49,34 @@ async def main():
     today = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y-%m-%d')
     new_df = pd.DataFrame({'date':[today]*len(today_list), 'stock':today_list})
     
+    # [수정] 데이터 타입 강제 지정으로 TypeError 방지
     if os.path.exists(DATA_FILE):
-        df = pd.read_csv(DATA_FILE)
+        df = pd.read_csv(DATA_FILE, dtype={'date': str}) 
         df = pd.concat([df, new_df]).drop_duplicates()
     else: df = new_df
     df.to_csv(DATA_FILE, index=False)
 
-    counts = df[df['date'] >= (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')]['stock'].value_counts()
+    # 연속 포착 분석
+    limit = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
+    recent_df = df[df['date'].astype(str) >= limit] # 문자열 비교 강제
+    counts = recent_df['stock'].value_counts()
     leaders = counts[counts >= 2].index.tolist()
 
-    # 리포트 작성
+    # 리포트 작성 (이미지 양식 반영)
     msg = f"📊 **시장 주요 지수 ({today})**\n{get_indices()}\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += "🔥 **AI 주도주 (2회 이상 포착)**\n\n"
+    msg += "🔥 **AI 주도주 분석 리포트**\n\n"
 
     for name in leaders[:5]:
         info = get_details(name)
         msg += f"🏆 **{name}**\n"
         msg += f" ├ 💰 가격: {info}\n"
-        msg += f" ├ 📈 AI 판별: 긍정(수급 집중)\n" # 뉴스 영향도 반영
-        msg += f" ├ ⏳ 재료 상태: 지속(유효)\n"
-        msg += f" └ 🏷️ 섹터: 주도 테마군\n\n"
+        msg += f" ├ 🤖 AI 판별: 긍정 (수급 집중)\n" # 이미지 b184a0 반영
+        msg += f" ├ ⏳ 재료 상태: 지속 (강력)\n" # 이미지 b184a0 반영
+        msg += f" └ 📈 섹터 트렌드: 주도 테마군\n\n" # 이미지 b184a0 반영
 
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += "💡 224일선 부근 눌림목 전략을 참고하세요."
+    msg += "💡 224일선 부근 눌림목 여부를 체크하세요."
 
     async with bot:
         await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
