@@ -3,3 +3,5 @@ webdriver-manager
 pandas
 python-telegram-bot==20.0
 finance-datareader
+google-generativeai
+Pillow
