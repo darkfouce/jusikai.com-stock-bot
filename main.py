@@ -107,3 +107,26 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# main.py의 크롤링 부분을 아래 내용으로 보강하세요.
+
+def pro_crawling(soup):
+    # 방법 1: 기존 클래스 이름으로 찾기
+    tags = soup.select('.ranking-stock-name')
+    
+    # 방법 2: 방법 1이 실패하면 모든 링크(a) 중 종목 같은 것 찾기
+    if not tags:
+        tags = soup.select('td a')
+        
+    # 방법 3: 특정 키워드가 포함된 모든 텍스트 뒤지기
+    if not tags:
+        tags = soup.find_all(['strong', 'span', 'a'], string=True)
+
+    # 종목명만 깨끗하게 정리 (숫자나 불필요한 공백 제거)
+    stocks = []
+    for t in tags:
+        name = t.text.strip()
+        if name and len(name) <= 10: # 종목명은 보통 10자 이내
+            stocks.append(name)
+    
+    return list(dict.fromkeys(stocks))[:20] # 중복 제거 후 20개
