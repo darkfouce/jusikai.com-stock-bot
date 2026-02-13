@@ -1,25 +1,66 @@
-name: Debug Bot
+name: Final Debug Test
 
 on: [push, workflow_dispatch]
 
 jobs:
-  debug:
+  debug-job:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: 파이썬 설정
+    - name: 1. 기본 환경 설정
+      uses: actions/checkout@v3
+
+    - name: 2. 파이썬 설치
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
-        
-    - name: 라이브러리 설치
-      run: pip install -r requirements.txt
-      
-    - name: 봇 실행 (디버깅 모드)
+
+    - name: 3. 도구(라이브러리) 강제 설치
+      # requirements.txt 파일 없이 여기서 직접 설치합니다.
+      run: |
+        pip install python-telegram-bot requests beautifulsoup4 pandas
+        pip list | grep telegram  # 설치 잘 됐는지 확인용
+
+    - name: 4. 봇 실행 및 진단
       env:
-        # 여기가 제일 중요합니다! Secrets를 파이썬으로 넘겨주는 다리 역할
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         CHAT_ID: ${{ secrets.CHAT_ID }}
-      run: python main.py
+      run: |
+        python -c "
+        import os
+        import sys
+        import asyncio
+        import telegram
+
+        print('--- [진단 시작] ---')
+
+        # 1. 비밀번호 확인
+        token = os.environ.get('TELEGRAM_TOKEN')
+        chat_id = os.environ.get('CHAT_ID')
+
+        if not token:
+            print('❌ [에러] TELEGRAM_TOKEN이 비어있습니다!')
+            print('-> GitHub Settings > Secrets 메뉴를 다시 확인하세요.')
+            sys.exit(1)
+        
+        if not chat_id:
+            print('❌ [에러] CHAT_ID가 비어있습니다!')
+            sys.exit(1)
+
+        print(f'✅ 비밀번호 확인 완료 (ID: {chat_id})')
+
+        # 2. 텔레그램 전송 테스트
+        async def send_test():
+            print('📡 텔레그램 전송 시도 중...')
+            bot = telegram.Bot(token=token)
+            try:
+                await bot.send_message(chat_id=chat_id, text='🎉 [성공] 드디어 봇이 연결되었습니다! 이제 코드를 다시 올리셔도 됩니다.')
+                print('✅ 전송 성공! 핸드폰을 확인하세요.')
+            except Exception as e:
+                print(f'❌ [전송 실패] 에러 내용: {e}')
+                print('-> 봇에게 말을 안 걸었거나, 토큰이 틀렸을 수 있습니다.')
+                sys.exit(1)
+
+        asyncio.run(send_test())
+        print('--- [진단 종료] ---')
+        "
