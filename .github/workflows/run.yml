@@ -1,38 +1,25 @@
-name: Auto Stock Bot
+name: Debug Bot
 
-on:
-  schedule:
-    # 한국 시간 오후 4시 30분 (UTC 07:30)에 실행
-    - cron: '30 7 * * 1-5'
-  workflow_dispatch: # 수동 실행 버튼
+on: [push, workflow_dispatch]
 
 jobs:
-  build:
+  debug:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # 파일 저장 권한
-
+    
     steps:
     - uses: actions/checkout@v3
-
-    - name: 파이썬 설치
+    
+    - name: 파이썬 설정
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
-
+        
     - name: 라이브러리 설치
       run: pip install -r requirements.txt
-
-    - name: 봇 실행
+      
+    - name: 봇 실행 (디버깅 모드)
       env:
+        # 여기가 제일 중요합니다! Secrets를 파이썬으로 넘겨주는 다리 역할
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         CHAT_ID: ${{ secrets.CHAT_ID }}
       run: python main.py
-
-    - name: 결과 저장
-      run: |
-        git config --global user.name "StockBot"
-        git config --global user.email "bot@noreply.github.com"
-        git add stock_history.csv || echo "No file"
-        git commit -m "Update Data" || echo "No changes"
-        git push
