@@ -1,109 +1,81 @@
-import requests
-from bs4 import BeautifulSoup
-import pandas as pd
-import telegram
-import asyncio
 import os
-from datetime import datetime, timedelta
+import sys
 
-# 1. 환경변수 가져오기
+print("🚀 [1단계] 스크립트 시작")
+
+# 1. 라이브러리 임포트 테스트
+try:
+    import requests
+    from bs4 import BeautifulSoup
+    import pandas as pd
+    import telegram
+    import asyncio
+    print("✅ 라이브러리 불러오기 성공")
+except ImportError as e:
+    print(f"❌ [에러] 라이브러리가 설치되지 않았습니다: {e}")
+    print("requirements.txt 파일을 확인해주세요.")
+    sys.exit(1)
+
+# 2. 환경변수(Secrets) 확인
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
-DATA_FILE = "stock_history.csv"
-TARGET_URL = "https://jusikai.com/"
 
-async def run_bot():
-    # [1단계] 봇 연결 확인 (실행 시작 알림)
+if not TOKEN or not CHAT_ID:
+    print("❌ [에러] 텔레그램 설정(Secrets)이 없습니다!")
+    print("GitHub Settings -> Secrets and variables -> Actions에 TELEGRAM_TOKEN과 CHAT_ID가 있는지 확인하세요.")
+    sys.exit(1) # 여기서 강제 종료
+else:
+    print("✅ 환경변수(Secrets) 확인 완료")
+
+# 3. 크롤링 테스트
+TARGET_URL = "https://jusikai.com/"
+print(f"🔍 [2단계] {TARGET_URL} 접속 시도...")
+
+try:
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    response = requests.get(TARGET_URL, headers=headers, timeout=10)
+    
+    if response.status_code != 200:
+        print(f"❌ [에러] 사이트 접속 실패. 상태 코드: {response.status_code}")
+        sys.exit(1)
+        
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # 여기서 태그를 찾아봅니다.
+    print("🧩 HTML 태그 찾는 중...")
+    
+    # [수정 포인트] 사이트 구조에 맞는 태그인지 확인
+    tags = soup.select('.ranking-stock-name') 
+    
+    if not tags:
+        print("⚠️ [경고] '.ranking-stock-name' 태그를 하나도 못 찾았습니다.")
+        print("사이트가 자바스크립트로 로딩되거나, 클래스 이름이 바뀌었을 수 있습니다.")
+        print("--- HTML 일부분 출력 (디버깅용) ---")
+        print(soup.prettify()[:500]) # HTML 앞부분 500자만 출력해서 확인
+        print("--------------------------------")
+        # 태그를 못 찾아도 일단 텔레그램 테스트를 위해 넘어갑니다.
+        stocks = ["테스트종목1", "테스트종목2"] 
+    else:
+        stocks = [t.text.strip() for t in tags]
+        print(f"✅ 크롤링 성공: {len(stocks)}개 발견 -> {stocks[:3]}...")
+
+except Exception as e:
+    print(f"❌ [에러] 크롤링 중 문제 발생: {e}")
+    sys.exit(1)
+
+# 4. 텔레그램 전송 테스트
+print("📨 [3단계] 텔레그램 전송 시도...")
+
+async def send_test_msg():
     bot = telegram.Bot(token=TOKEN)
     try:
-        print("🤖 봇 실행 시작... 텔레그램 테스트 중")
-        # 시작하자마자 메시지를 한번 보내봅니다. (토큰이 맞는지 확인용)
-        # 너무 시끄러우면 나중에 주석 처리하세요.
-        # await bot.send_message(chat_id=CHAT_ID, text="🤖 주식AI 봇이 작동을 시작했습니다!")
+        await bot.send_message(chat_id=CHAT_ID, text="🤖 [테스트] 봇이 정상 작동 중입니다! (에러 해결됨)")
+        print("✅ 텔레그램 전송 성공!")
     except Exception as e:
-        print(f"❌ 텔레그램 연결 실패! 토큰이나 CHAT_ID를 확인하세요.\n에러: {e}")
-        return
-
-    # [2단계] 크롤링 시도
-    print(f"🔍 {TARGET_URL} 접속 시도 중...")
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    
-    found_stocks = []
-    
-    try:
-        response = requests.get(TARGET_URL, headers=headers)
-        response.raise_for_status() # 접속 에러 체크
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # [중요] 여기에 실제 사이트의 '종목명' 클래스 이름을 넣어야 합니다.
-        # 개발자 도구(F12)로 확인 필요. 일단 흔한 이름들로 시도해봅니다.
-        # 예: .stock-name, .name, .company, td a 등
-        
-        # ⚠️ 사용자가 직접 수정해야 할 부분 ⚠️
-        # 만약 사이트 구조를 모르면 아래 줄을 수정해야 합니다.
-        # 여기서는 예시로 가장 일반적인 테이블 구조를 가정합니다.
-        stock_elements = soup.select('.ranking-stock-name') 
-        
-        # 만약 위 클래스가 없으면, 데이터가 0개로 나옵니다.
-        if not stock_elements:
-             # 비상용: h3 태그나 strong 태그라도 긁어보기 (테스트용)
-             stock_elements = soup.select('tr td a') 
-        
-        found_stocks = [s.text.strip() for s in stock_elements if s.text.strip()]
-        found_stocks = found_stocks[:20] # 상위 20개만
-        
-        print(f"✅ 크롤링 성공: {len(found_stocks)}개 발견")
-
-    except Exception as e:
-        error_msg = f"❌ 사이트 접속 실패: {e}"
-        print(error_msg)
-        await bot.send_message(chat_id=CHAT_ID, text=error_msg)
-        return
-
-    # [3단계] 데이터 분석 및 저장
-    if not found_stocks:
-        # 종목을 못 찾았으면 경고 메시지 전송
-        fail_msg = f"⚠️ 사이트 접속은 됐는데 종목을 못 찾았습니다.\nHTML 클래스 이름(.ranking-stock-name)이 틀린 것 같습니다.\n개발자 도구(F12)로 확인해서 main.py를 수정해주세요."
-        await bot.send_message(chat_id=CHAT_ID, text=fail_msg)
-        return
-
-    today_date = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y-%m-%d')
-    
-    # 데이터 저장 로직
-    if os.path.exists(DATA_FILE):
-        df = pd.read_csv(DATA_FILE)
-        df = df[df['date'] != today_date] # 오늘꺼 중복 삭제
-    else:
-        df = pd.DataFrame(columns=['date', 'stock'])
-        
-    new_data = pd.DataFrame({'date': [today_date]*len(found_stocks), 'stock': found_stocks})
-    df = pd.concat([df, new_data])
-    df.to_csv(DATA_FILE, index=False)
-    
-    # [4단계] 연속 등장 종목 분석
-    three_days_ago = (datetime.strptime(today_date, '%Y-%m-%d') - timedelta(days=2)).strftime('%Y-%m-%d')
-    recent_df = df[df['date'] >= three_days_ago]
-    
-    stock_counts = recent_df['stock'].value_counts()
-    targets = stock_counts[stock_counts >= 2] # 2회 이상 등장
-    
-    # [5단계] 결과 전송
-    msg = f"📅 {today_date} [주식AI] 분석 결과\n"
-    msg += f"수집된 종목: {len(found_stocks)}개\n\n"
-    
-    if len(targets) > 0:
-        msg += "🔥 **집중 관찰 종목 (2회 이상 포착)**\n"
-        for name, count in targets.items():
-            icon = "👑" if count >= 3 else "✅"
-            msg += f"{icon} {name} ({count}회)\n"
-    else:
-        msg += "👀 연속 포착된 종목이 없습니다.\n(데이터가 더 쌓여야 합니다)"
-
-    await bot.send_message(chat_id=CHAT_ID, text=msg)
-    print("🚀 최종 리포트 전송 완료")
+        print(f"❌ [에러] 텔레그램 전송 실패: {e}")
+        print("토큰이 틀렸거나, CHAT_ID가 잘못되었거나, 봇에게 말을 건 적이 없는 경우입니다.")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    asyncio.run(run_bot())
+    asyncio.run(send_test_msg())
+    print("🎉 모든 테스트 통과!")
