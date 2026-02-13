@@ -1,18 +1,21 @@
 import time
-import pandas as pd
 import telegram
 import asyncio
 import os
+import google.generativeai as genai
+from PIL import Image
+from io import BytesIO
+import pandas as pd
 import FinanceDataReader as fdr
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 DATA_FILE = "stock_history.csv"
 
 # [PRO] 시장 지수
@@ -21,91 +24,111 @@ def get_market():
     for n, c in {'코스피':'KS11','코스닥':'KQ11','나스닥':'IXIC'}.items():
         try:
             df = fdr.DataReader(c, (datetime.now()-timedelta(days=7)).strftime('%Y-%m-%d'))
-            curr, prev = df.iloc[-1]['Close'], df.iloc[-2]['Close']
-            chg = ((curr-prev)/prev)*100
+            curr = df.iloc[-1]['Close']
+            chg = ((curr - df.iloc[-2]['Close']) / df.iloc[-2]['Close']) * 100
             res += f" • {n}: {curr:,.2f} ({chg:+.2f}%)\n"
         except: res += f" • {n}: 조회불가\n"
     return res
 
 async def main():
-    if not TOKEN or not CHAT_ID: return
+    if not TOKEN or not CHAT_ID: 
+        print("텔레그램 토큰 없음")
+        return
+    
     bot = telegram.Bot(token=TOKEN)
     
-    # 1. [브라우저 모드] 실제 화면 띄우기 (스크린샷 방식)
+    # 1. 가상 브라우저 설정
     chrome_options = Options()
-    chrome_options.add_argument("--headless") # 화면 없이 실행 (서버용)
+    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,2000") # 길게 찍기
     
-    # 가상 브라우저 실행
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
     
+    today_list = []
+    screenshot_bio = None
+    
     try:
+        # 2. 사이트 스크린샷 촬영
         url = "https://jusikai.com/"
+        print("사이트 접속 및 촬영 중...")
         driver.get(url)
-        time.sleep(5) # [중요] 화면이 다 그려질 때까지 5초 대기 (사람처럼 기다림)
+        time.sleep(7) # 로딩 대기
         
-        # 화면에 보이는 종목명 요소 찾기 (랭킹 이름 클래스)
-        # 만약 클래스가 없으면 모든 링크(a)를 뒤짐
-        elements = driver.find_elements(By.CLASS_NAME, "ranking-stock-name")
+        png_data = driver.get_screenshot_as_png()
+        screenshot_bio = BytesIO(png_data)
+        image = Image.open(screenshot_bio)
         
-        if not elements:
-            # 클래스로 못 찾으면 테이블 안의 링크로 2차 시도
-            elements = driver.find_elements(By.CSS_SELECTOR, "table td a")
-
-        today_list = []
-        for e in elements:
-            text = e.text.strip()
-            # 2~7글자이고, 메뉴 이름이 아닌 것만 추출
-            if text and 2 <= len(text) <= 7 and text not in ['.com', '로그인', '서비스']:
-                today_list.append(text)
-        
-        today_list = list(dict.fromkeys(today_list))[:25] # 중복 제거
-        
-        if not today_list:
-            await bot.send_message(chat_id=CHAT_ID, text="⚠️ 브라우저 모드 실패: 화면 로딩 시간이 부족하거나 구조가 다릅니다.")
-            driver.quit()
-            return
+        # 3. 제미니(Vision)에게 물어보기
+        if GEMINI_API_KEY:
+            print("제미니에게 분석 요청 중...")
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-1.5-flash') # 빠르고 비전 성능 좋은 모델
+            
+            prompt = """
+            이 웹사이트 스크린샷에서 '주식 종목명'으로 보이는 단어들을 모두 찾아줘.
+            메뉴 이름(로그인, 서비스 소개 등)이나 지수 이름(KOSPI 등)은 빼고, 
+            순수하게 랭킹이나 표에 있는 종목명(예: 삼성전자, 에코프로 등)만 추출해.
+            결과는 쉼표(,)로 구분해서 한 줄로 알려줘. 설명은 필요 없어.
+            """
+            
+            response = model.generate_content([prompt, image])
+            ai_text = response.text.strip()
+            print(f"제미니 응답: {ai_text}")
+            
+            # 응답 정리
+            raw_list = ai_text.split(',')
+            today_list = [x.strip() for x in raw_list if x.strip()]
+            today_list = list(dict.fromkeys(today_list))[:25] # 중복 제거
+        else:
+            print("GEMINI_API_KEY가 없습니다. 스크린샷만 보냅니다.")
+            today_list = ["API키_미설정_분석불가"]
 
     except Exception as e:
-        await bot.send_message(chat_id=CHAT_ID, text=f"❌ 브라우저 에러: {e}")
+        await bot.send_message(chat_id=CHAT_ID, text=f"❌ AI 분석 에러: {e}")
         driver.quit()
         return
     
-    driver.quit() # 브라우저 종료
+    driver.quit()
 
-    # 2. 데이터 저장 및 분석
+    # 4. 데이터 저장 및 분석
     today = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y-%m-%d')
-    new_df = pd.DataFrame({'date': [today]*len(today_list), 'stock': today_list})
+    if "API키_미설정" not in today_list:
+        new_df = pd.DataFrame({'date': [today]*len(today_list), 'stock': today_list})
 
-    if os.path.exists(DATA_FILE):
-        try:
-            df = pd.read_csv(DATA_FILE, dtype=str)
-            df = pd.concat([df, new_df]).drop_duplicates()
-        except: df = new_df
-    else: df = new_df
-    df.to_csv(DATA_FILE, index=False)
+        if os.path.exists(DATA_FILE):
+            try:
+                df = pd.read_csv(DATA_FILE, dtype=str)
+                df = pd.concat([df, new_df]).drop_duplicates()
+            except: df = new_df
+        else: df = new_df
+        df.to_csv(DATA_FILE, index=False)
 
-    # 3. 리포트 작성
-    limit = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
-    recent = df[df['date'].astype(str) >= limit]
-    overlapping = recent['stock'].value_counts()[recent['stock'].value_counts() >= 2].index.tolist()
+        limit = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
+        recent = df[df['date'].astype(str) >= limit]
+        overlapping = recent['stock'].value_counts()[recent['stock'].value_counts() >= 2].index.tolist()
+    else:
+        overlapping = []
 
-    msg = f"📸 **[Visual] AI 브라우저 포착 ({today})**\n\n"
-    msg += f"📊 **지수 현황**\n{get_market()}\n"
+    # 5. 리포트 + 사진 전송
+    msg = f"🧠 **[Gemini Vision] AI 화면 분석 리포트 ({today})**\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += "💎 **AI 4대장 (화면 인식)**\n"
-    for s in today_list[:4]: msg += f" • {s}\n"
+    msg += f"📊 **지수 현황**\n{get_market()}\n"
+    
+    msg += "💎 **제미니가 찾아낸 종목**\n"
+    for s in today_list[:10]: msg += f" • {s}\n"
     
     msg += "\n🔥 **2~3일 연속 포착 주도주**\n"
-    if not overlapping: msg += " (현재 연속 포착 종목 없음)\n"
+    if not overlapping: msg += " (식별된 연속 종목 없음)\n"
     for s in overlapping[:5]:
-        msg += f"🏆 **{s}**\n ├ 🤖 AI: 긍정 / ⏳ 재료: 지속\n └ 📈 섹터: 주도 테마군\n\n"
+        msg += f"🏆 **{s}**\n"
     
-    msg += "━━━━━━━━━━━━━━━━━━\n💡 224일선 돌파 여부를 차트로 확인하세요!"
+    msg += "━━━━━━━━━━━━━━━━━━\n💡 제미니가 분석한 원본 화면입니다."
 
+    screenshot_bio.seek(0)
     async with bot:
-        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+        await bot.send_photo(chat_id=CHAT_ID, photo=screenshot_bio, caption=msg, parse_mode='Markdown')
 
 if __name__ == "__main__":
     asyncio.run(main())
