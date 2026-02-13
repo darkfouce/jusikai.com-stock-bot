@@ -23,14 +23,14 @@ async def main():
         res = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # [PRO] 특정 태그가 아니라, 종목명처럼 보이는 2~10자 사이의 모든 텍스트 수집
-        # 사이트 구조가 바뀌어도 대응 가능합니다.
+        # 특정 클래스(.ranking-stock-name)뿐만 아니라 표(td)와 링크(a)를 모두 탐색
         tags = soup.select('.ranking-stock-name') or soup.select('td a') or soup.select('tr td')
+        # 종목명은 보통 2~8자 사이이므로 해당 조건의 텍스트만 추출
         today_list = [t.text.strip() for t in tags if 2 <= len(t.text.strip()) <= 8]
-        today_list = list(dict.fromkeys(today_list))[:25] # 중복 제거 후 25개
+        today_list = list(dict.fromkeys(today_list))[:30] # 중복 제거
         
         if not today_list:
-            await bot.send_message(chat_id=CHAT_ID, text="⚠️ 사이트에서 종목을 읽지 못했습니다. 구조 확인이 필요합니다.")
+            await bot.send_message(chat_id=CHAT_ID, text="⚠️ 종목 추출 실패: 사이트에서 글자를 읽지 못했습니다.")
             return
     except Exception as e:
         await bot.send_message(chat_id=CHAT_ID, text=f"❌ 사이트 접속 에러: {e}")
@@ -42,26 +42,25 @@ async def main():
 
     if os.path.exists(DATA_FILE):
         try:
-            # 파일을 읽을 때 모든 데이터를 '문자열'로 강제 지정
+            # 모든 데이터를 문자열로 읽어서 데이터 형식이 꼬이는 현상 차단
             df = pd.read_csv(DATA_FILE, dtype=str)
             df = pd.concat([df, new_df]).drop_duplicates()
         except: df = new_df
     else: df = new_df
     df.to_csv(DATA_FILE, index=False)
 
-    # 3. 리포트 작성 (AI 4대장 & 중복 포착)
+    # 3. 리포트 작성
     limit = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
-    recent = df[df['date'] >= limit] # 문자열 상태로 비교
+    recent = df[df['date'] >= limit] # 문자열 비교로 안전하게 처리
     overlapping = recent['stock'].value_counts()[recent['stock'].value_counts() >= 2].index.tolist()
 
     msg = f"🔍 **[PRO] 오늘의 분석 리포트 ({today})**\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += "✨ **AI 4대장 추천**\n"
+    msg += "✨ **AI 4대장 추천 (상위 4개)**\n"
     for s in today_list[:4]: msg += f" • {s}\n"
     
     msg += "\n🔥 **2~3일 중복 주도주**\n"
-    if not overlapping:
-        msg += " (연속 포착된 종목 없음)\n"
+    if not overlapping: msg += " (연속 포착 종목 없음)\n"
     for s in overlapping[:5]:
         msg += f"🏆 **{s}**\n ├ 🤖 AI: 긍정 / ⏳ 재료: 지속\n └ 📈 섹터: 주도 테마\n\n"
     
