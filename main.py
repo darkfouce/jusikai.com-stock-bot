@@ -1,81 +1,85 @@
-import os
 import sys
+import os
+import asyncio
 
-print("🚀 [1단계] 스크립트 시작")
-
-# 1. 라이브러리 임포트 테스트
+# 1. 라이브러리 설치 확인
 try:
     import requests
     from bs4 import BeautifulSoup
-    import pandas as pd
     import telegram
-    import asyncio
-    print("✅ 라이브러리 불러오기 성공")
 except ImportError as e:
-    print(f"❌ [에러] 라이브러리가 설치되지 않았습니다: {e}")
-    print("requirements.txt 파일을 확인해주세요.")
+    print(f"❌ [치명적 에러] 라이브러리가 설치되지 않았습니다: {e}")
+    print("requirements.txt 파일에 오타가 있는지 확인해주세요.")
     sys.exit(1)
 
 # 2. 환경변수(Secrets) 확인
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 
-if not TOKEN or not CHAT_ID:
-    print("❌ [에러] 텔레그램 설정(Secrets)이 없습니다!")
-    print("GitHub Settings -> Secrets and variables -> Actions에 TELEGRAM_TOKEN과 CHAT_ID가 있는지 확인하세요.")
-    sys.exit(1) # 여기서 강제 종료
-else:
-    print("✅ 환경변수(Secrets) 확인 완료")
-
-# 3. 크롤링 테스트
-TARGET_URL = "https://jusikai.com/"
-print(f"🔍 [2단계] {TARGET_URL} 접속 시도...")
-
-try:
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    response = requests.get(TARGET_URL, headers=headers, timeout=10)
+async def main():
+    print("🚀 봇 진단 시작...")
     
-    if response.status_code != 200:
-        print(f"❌ [에러] 사이트 접속 실패. 상태 코드: {response.status_code}")
-        sys.exit(1)
-        
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # 여기서 태그를 찾아봅니다.
-    print("🧩 HTML 태그 찾는 중...")
-    
-    # [수정 포인트] 사이트 구조에 맞는 태그인지 확인
-    tags = soup.select('.ranking-stock-name') 
-    
-    if not tags:
-        print("⚠️ [경고] '.ranking-stock-name' 태그를 하나도 못 찾았습니다.")
-        print("사이트가 자바스크립트로 로딩되거나, 클래스 이름이 바뀌었을 수 있습니다.")
-        print("--- HTML 일부분 출력 (디버깅용) ---")
-        print(soup.prettify()[:500]) # HTML 앞부분 500자만 출력해서 확인
-        print("--------------------------------")
-        # 태그를 못 찾아도 일단 텔레그램 테스트를 위해 넘어갑니다.
-        stocks = ["테스트종목1", "테스트종목2"] 
-    else:
-        stocks = [t.text.strip() for t in tags]
-        print(f"✅ 크롤링 성공: {len(stocks)}개 발견 -> {stocks[:3]}...")
+    # [체크 1] 텔레그램 설정 확인
+    if not TOKEN or not CHAT_ID:
+        print("❌ [에러] 텔레그램 토큰(TOKEN) 또는 아이디(CHAT_ID)가 없습니다.")
+        print("GitHub Settings -> Secrets 메뉴에서 설정했는지 확인하세요.")
+        return
 
-except Exception as e:
-    print(f"❌ [에러] 크롤링 중 문제 발생: {e}")
-    sys.exit(1)
-
-# 4. 텔레그램 전송 테스트
-print("📨 [3단계] 텔레그램 전송 시도...")
-
-async def send_test_msg():
     bot = telegram.Bot(token=TOKEN)
+
+    # [체크 2] 텔레그램 연결 테스트
     try:
-        await bot.send_message(chat_id=CHAT_ID, text="🤖 [테스트] 봇이 정상 작동 중입니다! (에러 해결됨)")
-        print("✅ 텔레그램 전송 성공!")
+        # 일단 봇이 살아있는지 메시지부터 보냅니다.
+        await bot.send_message(chat_id=CHAT_ID, text="🤖 [봇 생존신고] 시스템 점검을 시작합니다.")
+        print("✅ 텔레그램 연결 성공")
     except Exception as e:
         print(f"❌ [에러] 텔레그램 전송 실패: {e}")
-        print("토큰이 틀렸거나, CHAT_ID가 잘못되었거나, 봇에게 말을 건 적이 없는 경우입니다.")
-        sys.exit(1)
+        print("토큰이 틀렸거나, 봇에게 말을 건 적이 없거나, CHAT_ID가 틀렸습니다.")
+        return
+
+    # [체크 3] 사이트 크롤링 테스트
+    url = "https://jusikai.com/"
+    print(f"🔍 {url} 접속 시도 중...")
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        
+        if res.status_code != 200:
+            error_msg = f"❌ 사이트 접속 실패 (상태코드: {res.status_code})"
+            print(error_msg)
+            await bot.send_message(chat_id=CHAT_ID, text=error_msg)
+            return
+            
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        # 태그 찾기 시도 (여러 가지 경우의 수 대입)
+        # 1순위: 랭킹 이름, 2순위: 일반적인 리스트, 3순위: 링크
+        tags = soup.select('.ranking-stock-name') 
+        if not tags:
+            tags = soup.select('.stock-name')
+        if not tags:
+            tags = soup.select('li a') # 최후의 수단
+            
+        stocks = [t.text.strip() for t in tags if t.text.strip()]
+        stocks = stocks[:10] # 10개만 가져오기
+
+        if not stocks:
+            fail_msg = "⚠️ 사이트 접속은 성공했으나, 종목명을 하나도 못 찾았습니다.\n(HTML 클래스 이름이 변경된 것 같습니다)"
+            print(fail_msg)
+            await bot.send_message(chat_id=CHAT_ID, text=fail_msg)
+        else:
+            success_msg = f"✅ 크롤링 성공!\n발견된 종목: {', '.join(stocks)}"
+            print(success_msg)
+            await bot.send_message(chat_id=CHAT_ID, text=success_msg)
+
+    except Exception as e:
+        err_msg = f"❌ 크롤링 도중 에러 발생: {e}"
+        print(err_msg)
+        await bot.send_message(chat_id=CHAT_ID, text=err_msg)
 
 if __name__ == "__main__":
-    asyncio.run(send_test_msg())
-    print("🎉 모든 테스트 통과!")
+    asyncio.run(main())
