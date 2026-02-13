@@ -36,12 +36,12 @@ async def main():
     
     bot = telegram.Bot(token=TOKEN)
     
-    # 1. 가상 브라우저 설정 (화면 크게)
+    # 1. 가상 브라우저 설정
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,2500") # 세로로 더 길게
+    chrome_options.add_argument("--window-size=1920,2500") # 세로로 길게
     
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
     
@@ -52,46 +52,50 @@ async def main():
         url = "https://jusikai.com/"
         print("사이트 접속 및 촬영 중...")
         driver.get(url)
-        time.sleep(10) # Thinking 모드는 분석 시간이 필요하므로 로딩도 넉넉히
+        time.sleep(8) # 로딩 대기
         
         png_data = driver.get_screenshot_as_png()
         screenshot_bio = BytesIO(png_data)
         image = Image.open(screenshot_bio)
         
-        # 3. Gemini Thinking Mode 호출
+        # 3. Gemini API 호출
         if GEMINI_API_KEY:
-            print("Gemini Thinking Mode (사고 모드) 가동 중...")
+            print(f"Gemini 3 Pro Preview 호출 중...")
             genai.configure(api_key=GEMINI_API_KEY)
             
-            # [최종 수정] 현존하는 유일한 사고 모델 (Gemini 2.0 Flash Thinking)
-            target_model = 'gemini-2.0-flash-thinking-exp-01-21'
+            # [사용자 요청 반영] 모델명을 gemini-3-pro-preview 로 설정
+            target_model = 'gemini-3-pro-preview'
             
             try:
                 model = genai.GenerativeModel(target_model)
                 
-                # 사고 과정을 유도하는 프롬프트
+                # Pro 모델의 성능을 끌어내기 위한 프롬프트
                 prompt = """
-                이 이미지의 내용을 단계별로 생각하며 분석해(Think step-by-step).
-                1. 이것은 주식 정보 사이트야. 화면에서 주식 종목 이름들이 나열된 곳을 찾아.
-                2. 메뉴(로그인, 공지사항)나 지수(KOSPI, KOSDAQ)는 무시해.
-                3. 오직 '개별 종목명'만 추출해. (예: 삼성전자, 알테오젠, 에코프로 등)
-                4. 추출한 종목명들을 쉼표(,)로 구분해서 한 줄로 출력해. 설명은 필요 없어.
+                이 웹사이트 스크린샷을 분석해주세요.
+                1. 화면에 보이는 '주식 종목명'(예: 삼성전자, 에코프로 등)을 모두 찾으세요.
+                2. 메뉴 이름, 뉴스 제목, 지수 이름(KOSPI 등)은 제외하세요.
+                3. 오직 종목명만 추출하여 쉼표(,)로 구분된 한 줄의 텍스트로 출력하세요.
                 """
                 
                 response = model.generate_content([prompt, image])
                 ai_text = response.text.strip()
-                print(f"사고 모드 분석 결과: {ai_text}")
+                print(f"Gemini 응답: {ai_text}")
                 
-                # 결과 정제
                 raw_list = ai_text.split(',')
                 today_list = [x.strip() for x in raw_list if x.strip()]
-                # 한글 2자 이상인 것만 필터링 (사고 과정 텍스트 제거용)
+                # 한글 2자 이상만 필터링 (오류 텍스트 제거)
                 today_list = [x for x in today_list if len(x) >= 2 and any(ord('가') <= ord(c) <= ord('힣') for c in x)]
                 today_list = list(dict.fromkeys(today_list))[:25]
                 
             except Exception as model_error:
-                print(f"❌ 모델 호출 실패: {model_error}")
-                today_list = ["모델_오류_로그확인"]
+                print(f"❌ 모델 호출 에러: {model_error}")
+                print("⚠️ 404 에러가 뜬다면 모델명이 아직 공개되지 않은 것입니다. 아래 사용 가능한 목록을 참고하세요:")
+                try:
+                    for m in genai.list_models():
+                        if 'generateContent' in m.supported_generation_methods:
+                            print(f" - {m.name}")
+                except: pass
+                today_list = ["모델명_확인필요"]
 
         else:
             print("GEMINI_API_KEY가 없습니다.")
@@ -105,7 +109,7 @@ async def main():
 
     # 4. 데이터 저장
     today = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y-%m-%d')
-    if today_list and "오류" not in today_list[0] and "미설정" not in today_list[0]:
+    if today_list and "확인필요" not in today_list[0] and "미설정" not in today_list[0]:
         new_df = pd.DataFrame({'date': [today]*len(today_list), 'stock': today_list})
         if os.path.exists(DATA_FILE):
             try:
@@ -122,11 +126,11 @@ async def main():
         overlapping = []
 
     # 5. 리포트 전송
-    msg = f"🧠 **[Thinking Mode] AI 심층 분석 리포트 ({today})**\n"
+    msg = f"🧠 **[Gemini 3 Pro] AI 분석 리포트 ({today})**\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
     msg += f"📊 **지수 현황**\n{get_market()}\n"
     
-    if today_list and "오류" not in today_list[0]:
+    if today_list and "확인필요" not in today_list[0]:
         msg += "💎 **AI 포착 종목**\n"
         for s in today_list[:10]: msg += f" • {s}\n"
     else:
@@ -137,7 +141,7 @@ async def main():
     for s in overlapping[:5]:
         msg += f"🏆 **{s}**\n"
     
-    msg += "━━━━━━━━━━━━━━━━━━\n💡 사고 모드(Thinking Mode)가 분석한 화면입니다."
+    msg += "━━━━━━━━━━━━━━━━━━\n💡 원본 스크린샷을 확인하세요."
 
     if screenshot_bio:
         screenshot_bio.seek(0)
