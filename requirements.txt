@@ -1,5 +1,5 @@
 requests
 beautifulsoup4
 pandas
-python-telegram-bot
-FinanceDataReader
+python-telegram-bot==20.0
+finance-datareader
