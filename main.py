@@ -1,19 +1,21 @@
-import requests
-from bs4 import BeautifulSoup
+import time
 import pandas as pd
 import telegram
 import asyncio
 import os
 import FinanceDataReader as fdr
 from datetime import datetime, timedelta
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 DATA_FILE = "stock_history.csv"
 
-# [PRO] 제외할 메뉴 이름 리스트 (image_beb728 기반)
-JUNK_WORDS = ['.com', '서비스', '소개', '명예', '전당', 'RSI', 'MACD', '로그인', '회원가입', '공지사항']
-
+# [PRO] 시장 지수
 def get_market():
     res = ""
     for n, c in {'코스피':'KS11','코스닥':'KQ11','나스닥':'IXIC'}.items():
@@ -29,58 +31,70 @@ async def main():
     if not TOKEN or not CHAT_ID: return
     bot = telegram.Bot(token=TOKEN)
     
-    # 1. 크롤링 (정밀 필터링 모드)
-    url = "https://jusikai.com/"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    # 1. [브라우저 모드] 실제 화면 띄우기 (스크린샷 방식)
+    chrome_options = Options()
+    chrome_options.add_argument("--headless") # 화면 없이 실행 (서버용)
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    
+    # 가상 브라우저 실행
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
     
     try:
-        res = requests.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(res.text, 'html.parser')
+        url = "https://jusikai.com/"
+        driver.get(url)
+        time.sleep(5) # [중요] 화면이 다 그려질 때까지 5초 대기 (사람처럼 기다림)
         
-        # 종목이 들어있을 만한 구역(td 내의 a 태그)만 집중 공략
-        tags = soup.select('table td a') or soup.select('.ranking-stock-name')
+        # 화면에 보이는 종목명 요소 찾기 (랭킹 이름 클래스)
+        # 만약 클래스가 없으면 모든 링크(a)를 뒤짐
+        elements = driver.find_elements(By.CLASS_NAME, "ranking-stock-name")
         
+        if not elements:
+            # 클래스로 못 찾으면 테이블 안의 링크로 2차 시도
+            elements = driver.find_elements(By.CSS_SELECTOR, "table td a")
+
         today_list = []
-        for t in tags:
-            name = t.text.strip()
-            # [PRO] 메뉴 이름 제외 및 주식 종목명 길이(2~6자) 필터링
-            if name and 2 <= len(name) <= 6 and not any(jw in name for jw in JUNK_WORDS):
-                today_list.append(name)
+        for e in elements:
+            text = e.text.strip()
+            # 2~7글자이고, 메뉴 이름이 아닌 것만 추출
+            if text and 2 <= len(text) <= 7 and text not in ['.com', '로그인', '서비스']:
+                today_list.append(text)
         
         today_list = list(dict.fromkeys(today_list))[:25] # 중복 제거
-
+        
         if not today_list:
-            await bot.send_message(chat_id=CHAT_ID, text="⚠️ 종목 추출 실패: 유효한 종목명을 찾지 못했습니다.")
+            await bot.send_message(chat_id=CHAT_ID, text="⚠️ 브라우저 모드 실패: 화면 로딩 시간이 부족하거나 구조가 다릅니다.")
+            driver.quit()
             return
-            
-    except Exception as e:
-        await bot.send_message(chat_id=CHAT_ID, text=f"❌ 접속 에러: {e}")
-        return
 
-    # 2. 데이터 누적 (TypeError 완벽 방지 패치)
+    except Exception as e:
+        await bot.send_message(chat_id=CHAT_ID, text=f"❌ 브라우저 에러: {e}")
+        driver.quit()
+        return
+    
+    driver.quit() # 브라우저 종료
+
+    # 2. 데이터 저장 및 분석
     today = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y-%m-%d')
     new_df = pd.DataFrame({'date': [today]*len(today_list), 'stock': today_list})
 
     if os.path.exists(DATA_FILE):
         try:
-            # 파일을 읽을 때 무조건 글자(str)로 읽어서 float64 오류 차단
             df = pd.read_csv(DATA_FILE, dtype=str)
             df = pd.concat([df, new_df]).drop_duplicates()
         except: df = new_df
     else: df = new_df
     df.to_csv(DATA_FILE, index=False)
 
-    # 3. 중복 포착 분석 (연속 포착 확인)
-    limit_date = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
-    recent = df[df['date'].astype(str) >= limit_date]
-    counts = recent['stock'].value_counts()
-    overlapping = counts[counts >= 2].index.tolist()
+    # 3. 리포트 작성
+    limit = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
+    recent = df[df['date'].astype(str) >= limit]
+    overlapping = recent['stock'].value_counts()[recent['stock'].value_counts() >= 2].index.tolist()
 
-    # 4. 리포트 작성
-    msg = f"🔍 **[PRO] AI 정밀 분석 리포트 ({today})**\n\n"
+    msg = f"📸 **[Visual] AI 브라우저 포착 ({today})**\n\n"
     msg += f"📊 **지수 현황**\n{get_market()}\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += "💎 **AI 4대장 오늘의 추천주**\n"
+    msg += "💎 **AI 4대장 (화면 인식)**\n"
     for s in today_list[:4]: msg += f" • {s}\n"
     
     msg += "\n🔥 **2~3일 연속 포착 주도주**\n"
@@ -88,7 +102,7 @@ async def main():
     for s in overlapping[:5]:
         msg += f"🏆 **{s}**\n ├ 🤖 AI: 긍정 / ⏳ 재료: 지속\n └ 📈 섹터: 주도 테마군\n\n"
     
-    msg += "━━━━━━━━━━━━━━━━━━\n💡 224일선 부근 눌림목 여부를 확인하세요!"
+    msg += "━━━━━━━━━━━━━━━━━━\n💡 224일선 돌파 여부를 차트로 확인하세요!"
 
     async with bot:
         await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
