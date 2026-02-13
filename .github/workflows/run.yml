@@ -1,35 +1,36 @@
-name: Stock AI Auto Bot
+name: Stock AI Bot
 
 on:
   schedule:
-    # 한국 시간 오후 4시 30분 (UTC 07:30) 자동 실행
-    - cron: '30 7 * * 1-5'
-  workflow_dispatch: # 필요할 때 버튼 눌러서 즉시 실행
+    - cron: '30 7 * * 1-5' # 평일 16:30 (KST)
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 3일치 데이터를 누적 저장하기 위해 쓰기 권한 필수
+      contents: write
 
     steps:
     - uses: actions/checkout@v3
 
-    - name: 파이썬 설정
+    - name: Set up Python 3.10
       uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
+        python-version: '3.10'
 
-    - name: 라이브러리 설치
-      run: pip install -r requirements.txt
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
 
-    - name: 주도주 분석 실행
+    - name: Run Analysis
       env:
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         CHAT_ID: ${{ secrets.CHAT_ID }}
       run: python main.py
 
-    - name: 데이터 누적 저장
+    - name: Save History
       run: |
         git config --global user.name "StockBot"
         git config --global user.email "bot@noreply.github.com"
