@@ -11,8 +11,8 @@ TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 DATA_FILE = "stock_history.csv"
 
-# [PRO] 제외할 메뉴 이름 리스트
-JUNK_WORDS = ['.com', '서비스', '소개', '명예', '전당', 'RSI', 'MACD', '로그인', '회원가입', '공지사항']
+# [PRO] 제외할 메뉴 단어 리스트 (image_beb728 기반)
+JUNK_WORDS = ['.com', '서비스', '소개', '명예', '전당', 'RSI', 'MACD', '로그인', '회원가입', '공지', '고객']
 
 def get_market():
     res = ""
@@ -29,7 +29,7 @@ async def main():
     if not TOKEN or not CHAT_ID: return
     bot = telegram.Bot(token=TOKEN)
     
-    # 1. 크롤링 (정밀 필터링 모드)
+    # 1. 크롤링 (진짜 종목만 골라내는 필터 적용)
     url = "https://jusikai.com/"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
@@ -37,33 +37,33 @@ async def main():
         res = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 종목이 들어있을 만한 구역(td, a)만 집중 공략
-        tags = soup.select('td a') or soup.select('.ranking-stock-name')
+        # [PRO] 메뉴판이 아닌 본문 데이터만 타겟팅 (CSS 선택자 강화)
+        tags = soup.select('table td a') or soup.select('.ranking-stock-name')
         
         today_list = []
         for t in tags:
             name = t.text.strip()
-            # [PRO] 메뉴 이름 제외 및 주식 종목명 길이(2~6자) 필터링
-            if name and 2 <= len(name) <= 6 and not any(jw in name for jw in JUNK_WORDS):
+            # 2~7글자 사이이면서 메뉴어가 아닌 것만 종목으로 인정
+            if name and 2 <= len(name) <= 7 and not any(jw in name for jw in JUNK_WORDS):
                 today_list.append(name)
         
         today_list = list(dict.fromkeys(today_list))[:25] # 중복 제거
 
         if not today_list:
-            await bot.send_message(chat_id=CHAT_ID, text="⚠️ 종목 추출 실패: 유효한 종목명을 찾지 못했습니다.")
+            await bot.send_message(chat_id=CHAT_ID, text="⚠️ 유효한 종목을 찾지 못했습니다. 사이트 구역을 다시 분석합니다.")
             return
             
     except Exception as e:
         await bot.send_message(chat_id=CHAT_ID, text=f"❌ 접속 에러: {e}")
         return
 
-    # 2. 데이터 누적 (TypeError 완벽 방지 패치)
+    # 2. 데이터 누적 (TypeError 완벽 방지)
     today = (datetime.utcnow() + timedelta(hours=9)).strftime('%Y-%m-%d')
     new_df = pd.DataFrame({'date': [today]*len(today_list), 'stock': today_list})
 
     if os.path.exists(DATA_FILE):
         try:
-            # 파일을 읽을 때 무조건 글자(str)로 읽어서 float64 오류 차단
+            # 파일을 읽을 때 무조건 문자열(str)로 읽어서 float64 비교 오류 차단
             df = pd.read_csv(DATA_FILE, dtype=str)
             df = pd.concat([df, new_df]).drop_duplicates()
         except: df = new_df
@@ -71,8 +71,8 @@ async def main():
     df.to_csv(DATA_FILE, index=False)
 
     # 3. 중복 포착 분석
-    limit = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
-    recent = df[df['date'].astype(str) >= limit]
+    limit_date = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
+    recent = df[df['date'].astype(str) >= limit_date]
     counts = recent['stock'].value_counts()
     overlapping = counts[counts >= 2].index.tolist()
 
